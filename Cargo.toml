@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+
+members = [
+  "crates/erasure-node",
+  "crates/replic-sim"
+]
+
+[workspace.dependencies]
+inel = { git = "https://github.com/mihneabuz/inel.git" }

@@ -1,0 +1,7 @@
+[package]
+name = "erasure-node"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reed-solomon-erasure = "6.0"
