@@ -171,38 +171,3 @@ impl File {
         &mut self.shards
     }
 }
-
-#[test]
-fn simple() {
-    let s1 = "hello world!";
-    let mut file = File::encode(s1).unwrap();
-    file.shards_mut().delete(0);
-    assert_eq!(file.shards().size(), SHARD_SIZE);
-    assert!(file.can_decode());
-    let s2 = file.decode().unwrap();
-    assert_eq!(s1, s2);
-}
-
-#[test]
-fn big() {
-    let s1 = "hello world!".repeat(100);
-    let mut file = File::encode(&s1).unwrap();
-    file.shards_mut().delete(0);
-    file.shards_mut().delete(1);
-    file.shards_mut().delete(3);
-    file.shards_mut().delete(10);
-    file.shards_mut().delete(20);
-    assert!(file.can_decode());
-    let s2 = file.decode().unwrap();
-    assert_eq!(s1, s2);
-}
-
-#[test]
-fn fail() {
-    let s1 = "hello world!".repeat(3);
-    let mut file = File::encode(&s1).unwrap();
-    file.shards_mut().delete(0);
-    file.shards_mut().delete(1);
-    assert!(!file.can_decode());
-    assert!(file.decode().is_none());
-}

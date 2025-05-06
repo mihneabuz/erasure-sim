@@ -11,6 +11,13 @@ pub struct Node<N> {
 }
 
 impl<N: Network> Node<N> {
+    pub fn new(network: N) -> Self {
+        Self {
+            files: Mutex::new(HashMap::new()),
+            network,
+        }
+    }
+
     pub async fn upload(&self, name: String, content: String) {
         let file = File::encode(content).unwrap();
 
