@@ -31,10 +31,16 @@ impl Iterator for ShardsIter<'_> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Shard {
     index: usize,
     data: Vec<u8>,
+}
+
+impl std::fmt::Debug for Shard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shard").field("index", &self.index).finish()
+    }
 }
 
 impl Shard {

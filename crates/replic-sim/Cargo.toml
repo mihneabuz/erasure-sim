@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+erasure-node = { path = "../erasure-node" }
+tokio = { version = "1.44", features = ["full"] }
+lazy_static = "1.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
