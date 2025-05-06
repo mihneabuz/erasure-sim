@@ -38,7 +38,7 @@ mod file {
 
 mod node {
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         ops::Deref,
         pin::pin,
         sync::{
@@ -59,8 +59,9 @@ mod node {
 
     struct TestNetworkBuilderInner {
         id: usize,
-        senders: HashMap<usize, Sender<Command>>,
-        receivers: HashMap<usize, Receiver<Command>>,
+        senders: HashMap<usize, Sender<(usize, Command)>>,
+        receivers: HashMap<usize, Receiver<(usize, Command)>>,
+        disabled: HashSet<usize>,
     }
 
     impl TestNetworkBuilder {
@@ -70,6 +71,7 @@ mod node {
                     id: 0,
                     senders: HashMap::new(),
                     receivers: HashMap::new(),
+                    disabled: HashSet::new(),
                 })),
             }
         }
@@ -87,6 +89,10 @@ mod node {
                 id,
                 builder: self.inner.clone(),
             }
+        }
+
+        fn disable(&self, id: usize) {
+            self.inner.lock().unwrap().disabled.insert(id);
         }
     }
 
@@ -109,16 +115,23 @@ mod node {
 
         async fn send(&self, peer: String, cmd: Command) {
             let id = peer.parse().unwrap();
-            self.builder.lock().unwrap().senders[&id].send(cmd).unwrap();
+            let inner = self.builder.lock().unwrap();
+            if inner.disabled.contains(&id) {
+                return;
+            }
+
+            // println!("{} > SENDING to {}: {:?}", self.id, peer, cmd);
+            inner.senders[&id].send((self.id, cmd)).unwrap();
         }
 
         async fn recv(&self) -> Option<(String, Command)> {
             loop {
                 if let Some(res) = self.builder.lock().unwrap().receivers[&self.id]
                     .try_recv()
-                    .map(|cmd| (format!("{}", self.id), cmd))
+                    .map(|(id, cmd)| (format!("{id}"), cmd))
                     .ok()
                 {
+                    // println!("{} > RECEIVED from {}: {:?}", self.id, &res.0, &res.1);
                     return Some(res);
                 }
             }
@@ -166,11 +179,99 @@ mod node {
         let n1 = TestNode::new(builder.spawn());
         let n2 = TestNode::new(builder.spawn());
 
+        assert_eq!(aw(net.discover()).len(), 2);
+
         aw(n1.upload("test".to_string(), "content".to_string()));
-        println!("{:?}", aw(net.discover()));
-        println!("{:?}", aw(n1.download("test".to_string())));
-        println!("{:?}", aw(n2.download("test".to_string())));
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        println!("{:?}", aw(n2.download("test".to_string())));
+        assert!(aw(n1.download("test".to_string())).is_some());
+
+        aw(n2.download("test".to_string()));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        assert!(aw(n2.download("test".to_string())).is_some());
+    }
+
+    #[test]
+    fn big() {
+        let builder = TestNetworkBuilder::new();
+        let n1 = TestNode::new(builder.spawn());
+        let n2 = TestNode::new(builder.spawn());
+
+        let content = "hello world!".repeat(100);
+        let name = "hello".to_string();
+
+        aw(n1.upload(name.clone(), content.clone()));
+        assert!(aw(n1.download(name.clone())).is_some());
+
+        aw(n2.download(name.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let res = aw(n2.download(name.clone()));
+        assert!(res.is_some());
+        assert_eq!(res.unwrap(), content);
+    }
+
+    #[test]
+    fn many() {
+        let builder = TestNetworkBuilder::new();
+        let nodes = (0..32)
+            .map(|_| TestNode::new(builder.spawn()))
+            .collect::<Vec<_>>();
+
+        let content = "hello world!".repeat(100);
+        let name1 = "hello".to_string();
+        let name2 = "hello".to_string();
+        let name3 = "hello".to_string();
+
+        aw(nodes[0].upload(name1.clone(), content.clone()));
+        aw(nodes[10].upload(name2.clone(), content.clone()));
+        aw(nodes[20].upload(name3.clone(), content.clone()));
+
+        builder.disable(nodes[0].network().id);
+        builder.disable(nodes[10].network().id);
+
+        aw(nodes[7].download(name1.clone()));
+        aw(nodes[13].download(name2.clone()));
+        aw(nodes[17].download(name3.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let res = aw(nodes[7].download(name1.clone()));
+        assert!(res.is_some());
+        assert_eq!(res.unwrap(), content);
+
+        let res = aw(nodes[13].download(name2.clone()));
+        assert!(res.is_some());
+        assert_eq!(res.unwrap(), content);
+
+        let res = aw(nodes[17].download(name3.clone()));
+        assert!(res.is_some());
+        assert_eq!(res.unwrap(), content);
+    }
+
+    #[test]
+    fn lost() {
+        let builder = TestNetworkBuilder::new();
+        let nodes = (0..8)
+            .map(|_| TestNode::new(builder.spawn()))
+            .collect::<Vec<_>>();
+
+        let content = "hello world!".repeat(30);
+        let name = "hello".to_string();
+
+        aw(nodes[0].upload(name.clone(), content.clone()));
+        for i in 0..6 {
+            builder.disable(nodes[i].network().id);
+        }
+
+        aw(nodes[7].download(name.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
+        aw(nodes[7].download(name.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
+        aw(nodes[7].download(name.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
+        let res = aw(nodes[7].download(name.clone()));
+        assert!(res.is_none());
     }
 }

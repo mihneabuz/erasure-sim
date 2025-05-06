@@ -37,6 +37,12 @@ pub struct Shard {
     data: Vec<u8>,
 }
 
+impl Shard {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+}
+
 impl Shards {
     pub fn insert(&mut self, shard: Vec<u8>, index: usize) {
         self.inner[index] = Some(shard);

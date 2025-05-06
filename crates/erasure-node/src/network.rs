@@ -28,6 +28,7 @@ impl<N: Network> NetworkExt for N {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum Command {
     Create { name: String, meta: Metadata },
     Replicate { name: String, shard: Shard },

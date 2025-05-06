@@ -18,14 +18,23 @@ impl<N: Network> Node<N> {
         }
     }
 
+    pub fn network(&self) -> &N {
+        &self.network
+    }
+
     pub async fn upload(&self, name: String, content: String) {
-        let file = File::encode(content).unwrap();
+        let mut file = File::encode(content).unwrap();
 
         let peers = self.network.discover().await;
         for peer in &peers {
             self.network
                 .create(peer.clone(), name.clone(), file.metadata().clone())
                 .await;
+        }
+
+        for shard in file.shards_mut().present_iter() {
+            let peer = peers[shard.index() % peers.len()].clone();
+            self.network.replicate(peer, name.clone(), shard).await;
         }
 
         self.files.lock().unwrap().insert(name, file);
