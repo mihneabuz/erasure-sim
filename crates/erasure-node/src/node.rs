@@ -23,7 +23,7 @@ impl<N: Network> Node<N> {
     }
 
     pub async fn upload(&self, name: String, content: String) {
-        let mut file = File::encode(content).unwrap();
+        let file = File::encode(content).unwrap();
 
         let peers = self.network.discover().await;
         for peer in &peers {
@@ -32,7 +32,7 @@ impl<N: Network> Node<N> {
                 .await;
         }
 
-        for shard in file.shards_mut().present_iter() {
+        for shard in file.shards().present_iter() {
             let peer = peers[shard.index() % peers.len()].clone();
             self.network.replicate(peer, name.clone(), shard).await;
         }
@@ -40,13 +40,13 @@ impl<N: Network> Node<N> {
         self.files.lock().unwrap().insert(name, file);
     }
 
+    pub async fn try_download(&self, name: &String) -> Option<String> {
+        self.files.lock().unwrap().get_mut(name)?.decode()
+    }
+
     pub async fn download(&self, name: String) -> Option<String> {
-        {
-            let mut files = self.files.lock().unwrap();
-            let file = files.get_mut(&name)?;
-            if file.can_decode() {
-                return file.decode();
-            }
+        if let Some(res) = self.try_download(&name).await {
+            return Some(res);
         }
 
         for peer in self.network.discover().await {

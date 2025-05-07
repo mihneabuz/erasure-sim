@@ -1,151 +1,100 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-    sync::Arc,
-};
+mod network;
 
-use erasure_node::{
-    network::{Command, Network},
-    node::Node,
-};
-use lazy_static::lazy_static;
-use tokio::sync::{
-    Mutex,
-    mpsc::{Receiver, Sender, channel},
+use std::collections::HashSet;
+
+use network::SimNode;
+use rand::{
+    Rng,
+    distr::{Alphabetic, Alphanumeric, Uniform},
+    seq::{IndexedRandom, index},
 };
 use tracing::info;
 
-lazy_static! {
-    static ref MANAGER: SimNetworkManager = SimNetworkManager::new();
+struct File {
+    name: String,
+    content: String,
 }
 
-struct SimNetworkManager {
-    inner: Mutex<SimNetworkManagerInner>,
-}
+impl File {
+    pub fn generate(size: usize) -> Self {
+        let name = rand::rng()
+            .sample_iter(&Alphabetic)
+            .take(16)
+            .map(char::from)
+            .collect();
 
-impl SimNetworkManager {
-    fn new() -> Self {
-        Self {
-            inner: Mutex::new(SimNetworkManagerInner {
-                id: 0,
-                senders: HashMap::new(),
-                disabled: HashSet::new(),
-            }),
-        }
+        let content = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(size)
+            .map(char::from)
+            .collect();
+
+        Self { name, content }
     }
 
-    async fn spawn(&self) -> SimNode {
-        let mut inner = self.inner.lock().await;
-        let id = inner.id;
-        inner.id += 1;
-
-        let (sender, receiver) = channel(256);
-        inner.senders.insert(id, sender);
-        let net = SimNetwork {
-            id,
-            receiver: Mutex::new(receiver),
-        };
-
-        info!(id, "spawned node");
-        SimNode::new(net)
+    pub fn name(&self) -> String {
+        self.name.clone()
     }
 
-    async fn disable(&self, id: usize) {
-        self.inner.lock().await.disabled.insert(id);
-        info!(id, "disabled");
-    }
-
-    async fn enable(&self, id: usize) {
-        self.inner.lock().await.disabled.remove(&id);
-        info!(id, "enabled");
-    }
-
-    async fn peers(&self, id: usize) -> Vec<usize> {
-        let inner = self.inner.lock().await;
-        (0..inner.id)
-            .filter(|i| *i != id && !inner.disabled.contains(i))
-            .collect()
-    }
-
-    async fn forward(&self, from: usize, to: usize, cmd: Command) {
-        self.inner
-            .lock()
-            .await
-            .senders
-            .get_mut(&to)
-            .unwrap()
-            .send((from, cmd))
-            .await
-            .unwrap();
-    }
-}
-
-struct SimNetworkManagerInner {
-    id: usize,
-    senders: HashMap<usize, Sender<(usize, Command)>>,
-    disabled: HashSet<usize>,
-}
-
-struct SimNetwork {
-    id: usize,
-    receiver: Mutex<Receiver<(usize, Command)>>,
-}
-
-impl Network for SimNetwork {
-    async fn discover(&self) -> Vec<String> {
-        MANAGER
-            .peers(self.id)
-            .await
-            .into_iter()
-            .map(|id| format!("{id}"))
-            .collect()
-    }
-
-    async fn send(&self, peer: String, cmd: Command) {
-        info!(from = self.id, to = peer, ?cmd, "sending");
-        MANAGER.forward(self.id, peer.parse().unwrap(), cmd).await;
-    }
-
-    async fn recv(&self) -> Option<(String, Command)> {
-        let res = self.receiver.lock().await.recv().await?;
-        info!(from = res.0, to = self.id, cmd =? res.1, "received");
-        Some((format!("{}", res.0), res.1))
-    }
-}
-
-struct SimNode {
-    inner: Arc<Node<SimNetwork>>,
-}
-
-impl SimNode {
-    fn new(network: SimNetwork) -> Self {
-        let inner = Arc::new(Node::new(network));
-        let inner_clone = Arc::clone(&inner);
-        tokio::spawn(async move {
-            inner_clone.run().await;
-        });
-        Self { inner }
-    }
-
-    fn id(&self) -> usize {
-        self.network().id
-    }
-}
-
-impl Deref for SimNode {
-    type Target = Node<SimNetwork>;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.deref()
+    pub fn content(&self) -> String {
+        self.content.clone()
     }
 }
 
 struct Config {
     nodes: usize,
+
+    file_count: usize,
+    file_min_size: usize,
+    file_max_size: usize,
+
+    network_min_latency: usize,
+    network_max_latency: usize,
+
+    network_min_throughput: usize,
+    network_max_throughput: usize,
+
+    rounds: usize,
+    timeout: usize,
+    downloads: usize,
+    disable: usize,
 }
 
-fn generate_file() -> (String, String) {
-    ("test".to_string(), "content".repeat(1000))
+impl Config {
+    pub async fn spawn_nodes(&self) -> Vec<SimNode> {
+        let mut nodes = Vec::with_capacity(self.nodes);
+
+        let latency_distribution =
+            Uniform::new(self.network_min_latency, self.network_max_latency).unwrap();
+
+        let throughtput_distribution =
+            Uniform::new(self.network_min_throughput, self.network_max_throughput).unwrap();
+
+        for _ in 0..self.nodes {
+            let latency = rand::rng().sample(latency_distribution);
+            let throuput = rand::rng().sample(throughtput_distribution);
+            nodes.push(SimNode::spawn(latency, throuput).await);
+        }
+
+        info!(count = nodes.len(), "spawned nodes");
+
+        nodes
+    }
+
+    pub fn generate_files(&self) -> Vec<File> {
+        let mut files = Vec::with_capacity(self.file_count);
+
+        let distribution = Uniform::new(self.file_min_size, self.file_max_size).unwrap();
+
+        for _ in 0..self.file_count {
+            let size = rand::rng().sample(distribution);
+            files.push(File::generate(size));
+        }
+
+        info!(count = files.len(), "generated files");
+
+        files
+    }
 }
 
 #[tokio::main]
@@ -154,15 +103,72 @@ async fn main() {
         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
-    let config = Config { nodes: 32 };
+    let config = Config {
+        nodes: 8,
 
-    let mut nodes = Vec::new();
-    for _ in 0..config.nodes {
-        nodes.push(MANAGER.spawn().await);
+        file_count: 32,
+        file_min_size: 256,
+        file_max_size: 1024,
+
+        network_min_latency: 10,
+        network_max_latency: 30,
+
+        network_min_throughput: 100,
+        network_max_throughput: 10000,
+
+        rounds: 4,
+        timeout: 5000,
+        downloads: 16,
+        disable: 3,
+    };
+
+    let nodes = config.spawn_nodes().await;
+    let files = config.generate_files();
+
+    for file in &files {
+        nodes
+            .choose(&mut rand::rng())
+            .unwrap()
+            .upload(file.name(), file.content())
+            .await;
     }
 
-    let (name, content) = generate_file();
-    nodes[0].upload(name, content).await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    for round in 0..config.rounds {
+        tokio::time::sleep(std::time::Duration::from_millis(config.timeout as u64)).await;
+
+        let sample = index::sample(&mut rand::rng(), nodes.len(), config.disable)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        info!(round, nodes =? sample, "disabling nodes");
+
+        let (mut enabled, mut disabled) = (Vec::new(), Vec::new());
+        for (index, node) in nodes.iter().enumerate() {
+            if sample.contains(&index) {
+                node.disable().await;
+                disabled.push(node);
+            } else {
+                enabled.push(node);
+            }
+        }
+
+        info!(round, "starting");
+
+        let mut downloads = Vec::new();
+        for _ in 0..config.downloads {
+            let file = files.choose(&mut rand::rng()).unwrap();
+            let node = enabled.choose(&mut rand::rng()).unwrap();
+            downloads.push(node.download(file.name()));
+        }
+        futures::future::join_all(downloads).await;
+
+        info!(round, "done");
+
+        for node in disabled {
+            node.enable().await;
+        }
+    }
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }

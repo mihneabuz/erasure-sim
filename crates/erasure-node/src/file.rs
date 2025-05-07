@@ -44,6 +44,10 @@ impl std::fmt::Debug for Shard {
 }
 
 impl Shard {
+    pub fn size(&self) -> usize {
+        self.data.len()
+    }
+
     pub fn index(&self) -> usize {
         self.index
     }
@@ -148,6 +152,10 @@ impl File {
 
     pub fn decode(&self) -> Option<String> {
         let meta = self.metadata();
+        if !self.can_decode() {
+            return None;
+        }
+
         let mut data = self.shards().clone();
 
         let r = ReedSolomon::new(meta.data_shards, meta.parity_shards).ok()?;
