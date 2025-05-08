@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use erasure_node::{
@@ -18,8 +21,9 @@ lazy_static! {
     static ref MANAGER: SimNetworkManager = SimNetworkManager::new();
 }
 
-struct SimNetworkManager {
+pub struct SimNetworkManager {
     inner: Mutex<SimNetworkManagerInner>,
+    stats: SimNetworkStatsCounter,
 }
 
 impl SimNetworkManager {
@@ -30,7 +34,12 @@ impl SimNetworkManager {
                 senders: HashMap::new(),
                 disabled: HashSet::new(),
             }),
+            stats: SimNetworkStatsCounter::new(),
         }
+    }
+
+    pub fn stats() -> SimNetworkStats {
+        MANAGER.stats.get()
     }
 
     async fn spawn(&self, latency: usize, throughput: usize) -> SimNode {
@@ -87,23 +96,61 @@ struct SimNetworkManagerInner {
     disabled: HashSet<usize>,
 }
 
+pub struct SimNetworkStatsCounter {
+    successfull_downloads: AtomicU64,
+    failed_downloads: AtomicU64,
+    messages_sent: AtomicU64,
+    bytes_sent: AtomicU64,
+}
+
+pub struct SimNetworkStats {
+    pub successfull_downloads: u64,
+    pub failed_downloads: u64,
+    pub messages_sent: u64,
+    pub bytes_sent: u64,
+}
+
+impl SimNetworkStatsCounter {
+    fn new() -> Self {
+        Self {
+            successfull_downloads: AtomicU64::new(0),
+            failed_downloads: AtomicU64::new(0),
+            messages_sent: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+        }
+    }
+
+    fn increment_successfull_downloads(&self) {
+        self.successfull_downloads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn increment_failed_downloads(&self) {
+        self.failed_downloads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn increment_messages_sent(&self) {
+        self.messages_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn increment_bytes_sent(&self, val: u64) {
+        self.bytes_sent.fetch_add(val, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> SimNetworkStats {
+        SimNetworkStats {
+            successfull_downloads: self.successfull_downloads.load(Ordering::Relaxed),
+            failed_downloads: self.failed_downloads.load(Ordering::Relaxed),
+            messages_sent: self.messages_sent.load(Ordering::Relaxed),
+            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
+        }
+    }
+}
+
 pub struct SimNetwork {
     id: usize,
     receiver: Mutex<Receiver<(usize, Command)>>,
     latency: usize,
     throughput: usize,
-}
-
-impl SimNetwork {
-    fn ms_to_process(&self, cmd: &Command) -> usize {
-        let size = match cmd {
-            Command::Create { name, .. } => name.len(),
-            Command::Replicate { name, shard } => name.len() + shard.size(),
-            Command::Request { name } => name.len(),
-        };
-
-        self.latency + size / self.throughput
-    }
 }
 
 impl Network for SimNetwork {
@@ -119,6 +166,8 @@ impl Network for SimNetwork {
     async fn send(&self, peer: String, cmd: Command) {
         let id = peer.parse().unwrap();
         debug!(from = self.id, to = id, ?cmd, "sending");
+        MANAGER.stats.increment_messages_sent();
+        MANAGER.stats.increment_bytes_sent(cmd.size() as u64);
         tokio::spawn(MANAGER.forward(self.id, id, cmd));
     }
 
@@ -126,7 +175,7 @@ impl Network for SimNetwork {
         let res = self.receiver.lock().await.recv().await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(
-            self.ms_to_process(&res.1) as u64
+            (self.latency + res.1.size() / self.throughput) as u64,
         ))
         .await;
 
@@ -174,8 +223,10 @@ impl SimNode {
 
         if res.is_some() {
             info!(from = id, file = name, "download successfull");
+            MANAGER.stats.increment_successfull_downloads();
         } else {
             error!(from = id, file = name, "download failed");
+            MANAGER.stats.increment_failed_downloads();
         }
 
         res

@@ -2,7 +2,7 @@ mod network;
 
 use std::collections::HashSet;
 
-use network::SimNode;
+use network::{SimNetworkManager, SimNode};
 use rand::{
     Rng,
     distr::{Alphabetic, Alphanumeric, Uniform},
@@ -104,7 +104,7 @@ async fn main() {
         .init();
 
     let config = Config {
-        nodes: 8,
+        nodes: 12,
 
         file_count: 32,
         file_min_size: 256,
@@ -117,10 +117,12 @@ async fn main() {
         network_max_throughput: 10000,
 
         rounds: 4,
-        timeout: 5000,
-        downloads: 16,
-        disable: 3,
+        timeout: 8000,
+        downloads: 8,
+        disable: 6,
     };
+
+    info!("starting simulation");
 
     let nodes = config.spawn_nodes().await;
     let files = config.generate_files();
@@ -133,7 +135,7 @@ async fn main() {
             .await;
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(config.timeout as u64)).await;
 
     for round in 0..config.rounds {
         tokio::time::sleep(std::time::Duration::from_millis(config.timeout as u64)).await;
@@ -171,4 +173,13 @@ async fn main() {
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let stats = SimNetworkManager::stats();
+    info!(
+        downloads = stats.successfull_downloads,
+        failures = stats.failed_downloads,
+        messages = stats.messages_sent,
+        bytes = stats.bytes_sent,
+        "simulation complete"
+    );
 }

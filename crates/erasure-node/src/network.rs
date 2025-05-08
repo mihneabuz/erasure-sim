@@ -1,5 +1,22 @@
 use crate::file::{Metadata, Shard};
 
+#[derive(Clone, Debug)]
+pub enum Command {
+    Create { name: String, meta: Metadata },
+    Replicate { name: String, shard: Shard },
+    Request { name: String },
+}
+
+impl Command {
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Create { name, .. } => name.len() + std::mem::size_of::<Metadata>(),
+            Self::Replicate { name, shard } => name.len() + shard.size(),
+            Self::Request { name } => name.len(),
+        }
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait Network {
     async fn discover(&self) -> Vec<String>;
@@ -26,11 +43,4 @@ impl<N: Network> NetworkExt for N {
     async fn request(&self, peer: String, name: String) {
         self.send(peer, Command::Request { name }).await
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum Command {
-    Create { name: String, meta: Metadata },
-    Replicate { name: String, shard: Shard },
-    Request { name: String },
 }
